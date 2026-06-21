@@ -1,0 +1,15 @@
+.DS_Store
+*.zip
+__pycache__/
+*.pyc
+
+work/experiments/
+*.db
+*.db.bak*
+*.bak_*
+debug_log_full*.csv
+*.log
+.omx/
+work/Template_Python/Bot_Python/my_car_*.py
+work/Template_Python/Bot_Python/debug_log*.csv
+work/Template_Python/Bot_Python/__pycache__/
