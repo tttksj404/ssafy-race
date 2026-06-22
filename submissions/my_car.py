@@ -29,6 +29,31 @@ def _env_bool(name, default=True):
     return str(raw).strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _speed_profile(angles, vmax):
+    """Full-lookahead physics speed profiling (kimi/glm5.2/pro consensus): the
+    fastest speed NOW that still allows braking to every upcoming corner.
+    For each 10m segment ahead, corner speed = sqrt(grip*radius); the allowed
+    entry speed is sqrt(v_corner^2 + 2*decel*dist); target = min over lookahead.
+    Full throttle on straights, brake EARLY for far sharp corners. Map-agnostic."""
+    grip = _env_float("SSAFY_GEN_GRIP", 11.0)    # lateral accel m/s^2
+    decel = _env_float("SSAFY_GEN_DECEL", 8.0)   # braking decel m/s^2
+    vmin = _env_float("SSAFY_GEN_VMIN", 70.0)
+    seg = 10.0
+    target = vmax
+    prev = 0.0
+    for i, a in enumerate(angles or []):
+        delta = abs(a - prev)   # per-segment heading change = LOCAL curvature
+        prev = a
+        if delta < 0.5:
+            continue
+        radius = seg / math.radians(delta)
+        v_corner = math.sqrt(grip * radius) * 3.6           # km/h
+        d = (i + 1) * seg
+        v_allow = math.sqrt((v_corner / 3.6) ** 2 + 2 * decel * d) * 3.6
+        target = min(target, v_allow)
+    return max(vmin, min(vmax, target))
+
+
 class DrivingClient(DrivingController):
 
     def __init__(self):
@@ -239,6 +264,9 @@ class DrivingClient(DrivingController):
                     nearest_ob_dist = ob_dist
 
                 ped = _env_float("SSAFY_GEN_OBSTACLE_PED", 2.7 if not known_map else 2.25)  # general clearance (unseen tuned)
+                _pkv = _env_float("SSAFY_AVOID_PED_KV", 0.0)  # rank3: speed-scaled clearance (default off)
+                if _pkv > 0.0:
+                    ped = min(_env_float("SSAFY_AVOID_PED_MAX", 4.5), ped + _pkv * (spd / 3.6))
                 if map_num == "71":
                     ped = _env_float("SSAFY_MAP71_OBSTACLE_PED", 3.0)
                 elif map_num == "61":
@@ -484,6 +512,17 @@ class DrivingClient(DrivingController):
                     corridor_speed_cap = _sbk if corridor_speed_cap is None else min(corridor_speed_cap, _sbk)
                     break
 
+        # GENERAL committed-line hysteresis (rank2, map-agnostic, default OFF):
+        # hold the chosen gap and only switch when target moves past a deadband,
+        # killing tick-to-tick line flip that flings the car off-track.
+        if _env_bool("SSAFY_AVOID_GEN_ENABLE", False):
+            if spd < 5.0:
+                self._committed_target = None
+            _gdb = _env_float("SSAFY_AVOID_COMMIT_DEADBAND", 1.0)
+            if self._committed_target is None or abs(target_raw - self._committed_target) > _gdb:
+                self._committed_target = target_raw
+            target_raw = self._committed_target
+
         # ===== 92.83 구간 전용: 타겟 급변 억제(좌측 돌진 방지) =====
         if seg_9283:
             max_target_step = 0.35 if spd > 80 else 0.60
@@ -554,6 +593,11 @@ class DrivingClient(DrivingController):
             target = max(1.8, min(target, 4.8))
         if seg_m61_9294:
             target = max(-5.4, min(target, -2.6))
+
+        # GENERAL hard half-width clamp (rank2, map-agnostic): never target off-track.
+        if _env_bool("SSAFY_AVOID_GEN_ENABLE", False):
+            _drivable = max(0.5, half_load_width - _env_float("SSAFY_AVOID_EDGE_MARGIN", 1.0))
+            target = max(-_drivable, min(target, _drivable))
 
         self._prev_target_offset = target
         self.target_offset = target
@@ -779,6 +823,11 @@ class DrivingClient(DrivingController):
                 base_target = 100
             else:
                 base_target = 80
+
+            # GENERAL shortest-time speed profiler (full ~200m lookahead physics).
+            # Replaces the short-lookahead tiers when enabled (map-agnostic).
+            if _env_bool("SSAFY_GEN_SPEED_PROFILE", False):
+                base_target = _speed_profile(angles, 200.0)
 
             offset = abs(middle)
             if offset > 8:
@@ -1052,10 +1101,12 @@ class DrivingClient(DrivingController):
             self.escape_count = 0
             self.escape_dir = 0
 
-        if sensing_info.lap_progress > 0.5 and self.accident_step == 0 and abs(spd) < 1.0:
+        recovery_gate = _env_float("SSAFY_RECOVERY_PROGRESS_GATE", 0.0)  # rank1: ungated (early-wedge recovery), verified -61.5s
+
+        if sensing_info.lap_progress > recovery_gate and self.accident_step == 0 and abs(spd) < 1.0:
             self.accident_count += 1
 
-        if sensing_info.lap_progress > 0.5 and self.accident_step == 0 and sensing_info.collided and abs(spd) < 25:
+        if sensing_info.lap_progress > recovery_gate and self.accident_step == 0 and sensing_info.collided and abs(spd) < 25:
             self.accident_count += 3
 
         accident_trigger = 5 if map_num == "71" else (3 if not known_map else 8)
@@ -1105,9 +1156,8 @@ class DrivingClient(DrivingController):
                 car_controls.brake = 0
 
         if (
-            map_num == "71"
-            and _env_bool("SSAFY_MAP71_EMERGENCY_ESCAPE_ENABLE", True)
-            and sensing_info.lap_progress > 0.5
+            _env_bool("SSAFY_GEN_EMERGENCY_ESCAPE_ENABLE", True)
+            and sensing_info.lap_progress > recovery_gate
             and sensing_info.collided
             and abs(spd) < _env_float("SSAFY_MAP71_EMERGENCY_SPEED", 2.5)
         ):
@@ -1144,7 +1194,7 @@ class DrivingClient(DrivingController):
                     self.escape_dir = 0
                     car_controls.throttle = 1.0
                 car_controls.brake = 0.0
-        elif map_num == "71" and self.escape_count and abs(spd) > 8:
+        elif self.escape_count and abs(spd) > 8:
             self.escape_count = 0
             self.escape_dir = 0
 

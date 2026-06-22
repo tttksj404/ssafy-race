@@ -24,11 +24,15 @@ KNOBS = {
     "SSAFY_RECOVERY_FORWARD_FRAMES": ("int",   [4, 6, 8, 10, 12]),
     "SSAFY_RECOVERY_DONE_SPEED":     ("float", [12.0, 14.0, 18.0, 22.0]),
     "SSAFY_GEN_OBSTACLE_PED":        ("float", [1.8, 2.25, 2.7, 3.2]),
+    "SSAFY_GEN_GRIP":                ("float", [9.0, 11.0, 13.0, 15.0, 18.0]),
+    "SSAFY_GEN_DECEL":               ("float", [6.0, 8.0, 10.0, 12.0]),
+    "SSAFY_GEN_VMIN":                ("float", [60.0, 70.0, 80.0]),
 }
 SEED = {"SSAFY_RECOVERY_TRIGGER": 8, "SSAFY_RECOVERY_BACK_STEER": 0.45,
         "SSAFY_RECOVERY_BACK_THROTTLE": 0.75, "SSAFY_RECOVERY_BACK_FRAMES": 8,
         "SSAFY_RECOVERY_FORWARD_STEER": 0.55, "SSAFY_RECOVERY_FORWARD_FRAMES": 12,
-        "SSAFY_RECOVERY_DONE_SPEED": 18.0, "SSAFY_GEN_OBSTACLE_PED": 2.25}
+        "SSAFY_RECOVERY_DONE_SPEED": 18.0, "SSAFY_GEN_OBSTACLE_PED": 2.25,
+        "SSAFY_GEN_GRIP": 13.0, "SSAFY_GEN_DECEL": 8.0, "SSAFY_GEN_VMIN": 70.0}
 
 
 def fmt(env):
@@ -40,7 +44,7 @@ def fmt(env):
 
 def score_run(env, tag):
     """One GENERAL_ONLY run on one map. Retries flicker crashes; real DNF kept."""
-    penv = {**os.environ, **fmt(env), "SSAFY_GENERAL_ONLY": "1", "SSAFY_AVOID_MODE": "orig"}
+    penv = {**os.environ, **fmt(env), "SSAFY_GENERAL_ONLY": "1", "SSAFY_AVOID_MODE": "orig", "SSAFY_GEN_SPEED_PROFILE": "1"}
     for attempt in range(4):
         try:
             p = subprocess.run([str(RUNNER), tag.split("|")[0], f"gt_{tag.split('|')[1]}"],

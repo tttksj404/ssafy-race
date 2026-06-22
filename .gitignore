@@ -4,6 +4,8 @@ __pycache__/
 *.pyc
 
 work/experiments/
+work/external_repos/
+work/replays/
 *.db
 *.db.bak*
 *.bak_*
